@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>예약 상품 관리 대장</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type=number] { -moz-appearance: textfield; }
+  .toast { position: fixed; bottom: 16px; right: 16px; padding: 10px 14px; background: rgba(0,0,0,.85); color:#fff; border-radius: 8px; opacity: 0; transform: translateY(6px); transition: all .25s ease; pointer-events: none; font-size: 14px; }
+  .toast.show { opacity: 1; transform: translateY(0); }
+
+  /* 인쇄: 예약 목록만, 구매일/관리 숨김 + 가로 스크롤 제거 */
+  @media print {
+    body * { visibility: hidden !important; }
+    #listSection, #listSection * { visibility: visible !important; }
+    #listSection { position: absolute; left: 0; top: 0; width: 100%; }
+    .no-print { display: none !important; }
+    .overflow-x-auto { overflow: visible !important; }
+    #listSection table { min-width: auto !important; width: 100% !important; table-layout: auto !important; }
+    /* 구매일(4열), 관리(9열) 숨김 — 아래 열 순서 기준 */
+    #listSection thead th:nth-child(4),
+    #listSection tbody td:nth-child(4),
+    #listSection thead th:nth-child(9),
+    #listSection tbody td:nth-child(9) { display: none !important; }
+  }
+
+  /* 정렬 삼각형 */
+  .sort-caret{ margin-left:4px; font-size:12px; color:#9ca3af; user-select:none; }
+  .sort-caret.active{ color:#111827; }
+</style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+  <div class="max-w-7xl mx-auto p-4 md:p-8">
+    <header class="mb-6 no-print">
+      <h1 class="text-2xl md:text-3xl font-bold">예약 상품 관리 대장</h1>
+    </header>
+
+    <!-- 입력 폼 -->
+    <section class="bg-white rounded-2xl shadow p-4 md:p-6 mb-6 no-print">
+      <h2 class="text-xl font-semibold mb-4">예약 정보 입력</h2>
+      <form id="reservationForm" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label class="block text-sm font-medium mb-1" for="customerName">고객명 <span class="text-red-500">*</span></label>
+          <input id="customerName" type="text" required class="w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-900" placeholder="홍길동" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1" for="phone">전화번호 <span class="text-red-500">*</span></label>
+          <input id="phone" type="tel" required class="w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-900" placeholder="010-1234-5678" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1" for="memo">메모/주소</label>
+          <input id="memo" type="text" class="w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-900" placeholder="주소 또는 비고" />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1" for="purchaseDate">구매일</label>
+          <input id="purchaseDate" type="date" class="w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-900" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1" for="pickupDate">수령일</label>
+          <input id="pickupDate" type="date" class="w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-900" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1" for="quantity">수량(EA)</label>
+          <input id="quantity" type="number" min="0" step="1" class="w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-900" placeholder="0" />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1" for="unitPrice">개당 단가(원)</label>
+          <input id="unitPrice" inputmode="numeric" autocomplete="off" placeholder="예: 10,000" class="w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-900" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1" for="amount">판매금액(원, 자동계산/수정가능)</label>
+          <input id="amount" inputmode="numeric" autocomplete="off" placeholder="예: 123,456" class="w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-900" />
+          <p class="text-xs text-gray-500 mt-1">수량×단가=금액, 금액÷수량=단가</p>
+        </div>
+
+        <div class="md:col-span-2 flex flex-wrap gap-2 items-end">
+          <button id="saveBtn" class="px-4 py-2 rounded-xl bg-gray-900 text-white hover:bg-black">저장</button>
+          <button id="newBtn" type="button" class="px-4 py-2 rounded-xl border border-gray-300 hover:bg-gray-100">새로 작성</button>
+          <button id="clearAllBtn" type="button" class="px-4 py-2 rounded-xl border border-red-300 text-red-600 hover:bg-red-50">전체 삭제</button>
+        </div>
+
+        <input type="hidden" id="editingId" />
+      </form>
+    </section>
+
+    <!-- 조회/필터 -->
+    <section class="bg-white rounded-2xl shadow p-4 md:p-6 mb-6 no-print">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-semibold">조회 · 필터</h2>
+        <div class="flex flex-wrap gap-2">
+          <button id="todayPickupBtn" type="button" class="text-sm px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-100">오늘 배송 예정</button>
+          <button id="tomorrowPickupBtn" type="button" class="text-sm px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-100">내일 배송 예정</button>
+          <button id="resetFilterBtn" type="button" class="text-sm px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-100">필터 초기화</button>
+          <button id="printBtn" type="button" class="text-sm px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-100">예약목록 인쇄</button>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div>
+          <label class="block text-sm font-medium mb-1" for="filterName">고객/전화</label>
+          <input id="filterName" type="text" class="w-full rounded-xl border border-gray-300 px-3 py-2" placeholder="이름, 전화번호" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1" for="filterPurchase">구매일</label>
+          <input id="filterPurchase" type="date" class="w-full rounded-xl border border-gray-300 px-3 py-2" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1" for="filterPickup">수령일</label>
+          <input id="filterPickup" type="date" class="w-full rounded-xl border border-gray-300 px-3 py-2" />
+        </div>
+      </div>
+    </section>
+
+    <!-- 예약 목록 -->
+    <section id="listSection" class="bg-white rounded-2xl shadow p-4 md:p-6">
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3">
+        <h2 class="text-xl font-semibold">예약 목록</h2>
+        <div class="text-sm text-gray-600" id="summary">총 0건 · 수량 0EA · 금액 0원</div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="min-w-[1100px] w-full text-sm">
+          <thead>
+            <tr class="bg-gray-100 text-gray-700">
+              <th id="thName" class="px-3 py-2 text-left cursor-pointer select-none">
+                고객명<span class="sort-caret" data-field="name">▾</span>
+              </th>
+              <th id="thPhone" class="px-3 py-2 text-left cursor-pointer select-none">
+                전화번호<span class="sort-caret" data-field="phone">▾</span>
+              </th>
+              <th id="thMemo" class="px-3 py-2 text-left cursor-pointer select-none">
+                메모/주소<span class="sort-caret" data-field="memo">▾</span>
+              </th>
+              <th id="thPurchase" class="px-3 py-2 text-left cursor-pointer select-none">
+                구매일<span class="sort-caret" data-field="purchaseDate">▾</span>
+              </th>
+              <th id="thPickup" class="px-3 py-2 text-left cursor-pointer select-none">
+                수령일<span class="sort-caret" data-field="pickupDate">▾</span>
+              </th>
+              <th id="thQty" class="px-3 py-2 text-right cursor-pointer select-none">
+                수량(EA)<span class="sort-caret" data-field="qty">▾</span>
+              </th>
+              <th id="thUnit" class="px-3 py-2 text-right cursor-pointer select-none">
+                단가(원)<span class="sort-caret" data-field="unitW">▾</span>
+              </th>
+              <th id="thAmt" class="px-3 py-2 text-right cursor-pointer select-none">
+                금액(원)<span class="sort-caret" data-field="totalW">▾</span>
+              </th>
+              <th class="px-3 py-2 text-center no-print">관리</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast">저장되었습니다.</div>
+
+  <script>
+    /* ===== 유틸 ===== */
+    function $(sel){ return document.querySelector(sel); }
+    function $all(sel){ return document.querySelectorAll(sel); }
+    var STORAGE_KEY = 'reservation_ledger_v13';
+    function numberOnly(str){ return (str||'').toString().replace(/[^0-9]/g,''); }
+    function withCommas(n){ return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+    function showToast(msg){ var t=document.getElementById('toast'); t.textContent = msg||'저장되었습니다.'; t.classList.add('show'); setTimeout(function(){ t.classList.remove('show'); }, 1400); }
+    function load(){ try{ var raw = localStorage.getItem(STORAGE_KEY); return raw? JSON.parse(raw): []; }catch(e){ return []; } }
+    function save(rows){ localStorage.setItem(STORAGE_KEY, JSON.stringify(rows)); }
+    function ymdLocal(d){ var y=d.getFullYear(), m=('0'+(d.getMonth()+1)).slice(-2), da=('0'+d.getDate()).slice(-2); return y+'-'+m+'-'+da; }
+    function formatPhone(v){
+      var d = numberOnly(v);
+      if(d.length >= 11){ return d.replace(/(\d{3})(\d{4})(\d{4}).*/, '$1-$2-$3'); }
+      if(d.length === 10){ return d.replace(/(\d{3})(\d{3})(\d{4}).*/, '$1-$2-$3'); }
+      if(d.length >= 7){ return d.replace(/(\d{3})(\d{3,4})(\d{0,4}).*/, function(m,a,b,c){ return c? (a+'-'+b+'-'+c) : (a+'-'+b); }); }
+      return d;
+    }
+
+    /* ===== 상태 ===== */
+    var rows = load().map(function(r){
+      r.phone  = formatPhone(r.phone||'');
+      r.unitW  = Number(r.unitW||0);
+      r.totalW = Number(r.totalW||r.amtW||0);
+      return r;
+    });
+    var sortState = { field: 'name', dir: 'asc' };
+
+    /* 기본값: 구매일 = 오늘 */
+    (function(){
+      var pd = document.getElementById('purchaseDate');
+      if(pd && !pd.value) pd.value = ymdLocal(new Date());
+    })();
+
+    /* ===== 입력 이벤트 & 중앙 계산기 (양방향) ===== */
+    var qtyInput  = document.getElementById('quantity');
+    var unitInput = document.getElementById('unitPrice');
+    var amtInput  = document.getElementById('amount');
+    var guard = false;
+
+    function getQty(){ return parseInt(qtyInput.value||'0',10) || 0; }
+    function getMoney(el){ return parseInt(numberOnly(el.value||'0'),10) || 0; }
+    function setMoney(el, val){
+      var nv = withCommas(val||0);
+      if(el.value !== nv) el.value = nv;
+    }
+    function recompute(last){
+      if(guard) return; guard = true;
+      var q = getQty(), u = getMoney(unitInput), a = getMoney(amtInput);
+      if(last === 'qty' || last === 'unit'){
+        if(q > 0 && u > 0) setMoney(amtInput, q * u);
+      } else if(last === 'amount'){
+        if(q > 0 && a > 0) setMoney(unitInput, Math.floor(a / q));
+      } else {
+        if(q > 0 && u > 0 && a === 0) setMoney(amtInput, q * u);
+        if(q > 0 && a > 0 && u === 0) setMoney(unitInput, Math.floor(a / q));
+      }
+      guard = false;
+    }
+    ['input','blur','change'].forEach(function(evt){
+      qtyInput .addEventListener(evt, function(){ recompute('qty');   });
+      unitInput.addEventListener(evt, function(e){ e.target.value = withCommas(numberOnly(e.target.value)); recompute('unit'); });
+      amtInput .addEventListener(evt, function(e){ e.target.value = withCommas(numberOnly(e.target.value)); recompute('amount'); });
+    });
+
+    var phoneInput = document.getElementById('phone');
+    phoneInput.addEventListener('blur', function(){ phoneInput.value = formatPhone(phoneInput.value); });
+
+    /* ===== 저장/수정 공통 ===== */
+    function getFormData(){
+      var id = document.getElementById('editingId').value || (crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+      var name = document.getElementById('customerName').value.trim();
+      var phone = formatPhone(document.getElementById('phone').value.trim());
+      var memo = document.getElementById('memo').value.trim();
+      var purchaseDate = document.getElementById('purchaseDate').value || ymdLocal(new Date());
+      var pickupDate = document.getElementById('pickupDate').value;
+      var qty = getQty();
+      var unitW = getMoney(unitInput);
+      var totalW = getMoney(amtInput) || (qty*unitW);
+      return { id, name, phone, memo, purchaseDate, pickupDate, qty, unitW, totalW, createdAt: Date.now() };
+    }
+    function validateForm(d){
+      if(!d.name) return '고객명을 입력해 주세요.';
+      if(!d.phone) return '전화번호를 입력해 주세요.';
+      return null;
+    }
+    function resetForm(){
+      document.getElementById('reservationForm').reset();
+      document.getElementById('editingId').value='';
+      document.getElementById('purchaseDate').value = ymdLocal(new Date());
+    }
+    document.getElementById('reservationForm').addEventListener('submit', function(e){ e.preventDefault(); saveCurrentForm(); });
+    document.getElementById('saveBtn').addEventListener('click', function(e){ e.preventDefault(); saveCurrentForm(); });
+    document.getElementById('newBtn').addEventListener('click', resetForm);
+    document.getElementById('clearAllBtn').addEventListener('click', function(){
+      if(!confirm('전체 데이터를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) return;
+      rows = []; save(rows); render(); showToast('전체 삭제되었습니다.');
+    });
+    function saveCurrentForm(){
+      var d = getFormData();
+      var err = validateForm(d); if(err){ alert(err); return; }
+      var idx = rows.findIndex(function(x){ return x.id === d.id; });
+      if(idx >= 0){ rows[idx] = d; showToast('수정되었습니다.'); }
+      else { rows.unshift(d); showToast('저장되었습니다.'); }
+      save(rows); render(); resetForm();
+    }
+
+    /* ===== 필터 ===== */
+    ['#filterName','#filterPurchase','#filterPickup'].forEach(function(sel){
+      var el=$(sel); if(el){ el.addEventListener('input', render); }
+    });
+    document.getElementById('resetFilterBtn').addEventListener('click', function(){
+      ['#filterName','#filterPurchase','#filterPickup'].forEach(function(sel){ var el=$(sel); if(el){ el.value=''; }});
+      render();
+    });
+    document.getElementById('todayPickupBtn').addEventListener('click', function(){
+      document.getElementById('filterPickup').value = ymdLocal(new Date()); render();
+    });
+    document.getElementById('tomorrowPickupBtn').addEventListener('click', function(){
+      var d = new Date(); d.setDate(d.getDate()+1);
+      document.getElementById('filterPickup').value = ymdLocal(d); render();
+    });
+
+    function applyFilters(list){
+      var nameqRaw = document.getElementById('filterName').value||'';
+      var nameq = nameqRaw.trim().toLowerCase();
+      var nameqDigits = numberOnly(nameqRaw);
+      var pf = document.getElementById('filterPurchase').value;
+      var kf = document.getElementById('filterPickup').value;
+
+      return list.filter(function(r){
+        if(nameq){
+          var hitText = (r.name||'').toLowerCase().indexOf(nameq) > -1 ||
+                        (r.phone||'').toLowerCase().indexOf(nameq) > -1;
+          var hitDigits = nameqDigits && numberOnly(r.phone||'').indexOf(nameqDigits) > -1;
+          if(!(hitText || hitDigits)) return false;
+        }
+        if(pf && r.purchaseDate !== pf) return false;
+        if(kf && r.pickupDate !== kf) return false;
+        return true;
+      });
+    }
+
+    /* ===== 정렬 삼각형 제어 ===== */
+    function refreshCarets(){
+      document.querySelectorAll('.sort-caret').forEach(function(el){
+        el.classList.remove('active');
+        el.textContent = '▾';
+      });
+      var active = document.querySelector('.sort-caret[data-field="'+sortState.field+'"]');
+      if(active){
+        active.classList.add('active');
+        active.textContent = (sortState.dir === 'asc') ? '▲' : '▼';
+      }
+    }
+    function attachSortHeader(id, field){
+      var el=document.getElementById(id); if(!el) return;
+      el.addEventListener('click', function(){
+        if(sortState.field!==field){ sortState.field=field; sortState.dir='asc'; }
+        else { sortState.dir = (sortState.dir==='asc'?'desc':'asc'); }
+        render();
+      });
+    }
+    attachSortHeader('thName','name');
+    attachSortHeader('thPhone','phone');
+    attachSortHeader('thMemo','memo');
+    attachSortHeader('thPurchase','purchaseDate');
+    attachSortHeader('thPickup','pickupDate');
+    attachSortHeader('thQty','qty');
+    attachSortHeader('thUnit','unitW');
+    attachSortHeader('thAmt','totalW');
+
+    /* ===== 팝업에서 저장 시 메인 동기화 (file:// 대응) ===== */
+    window.addEventListener('message', function (e) {
+      if (e && e.data && e.data.type === 'LEDGER_UPDATED' && e.data.key === STORAGE_KEY) {
+        rows = load().map(function (r) { r.phone = formatPhone(r.phone || ''); return r; });
+        render();
+      }
+    });
+    window.addEventListener('focus', function () {
+      // 포커스 돌아오면 한 번 더 동기화(보조 안전망)
+      rows = load().map(function (r) { r.phone = formatPhone(r.phone || ''); return r; });
+      render();
+    });
+
+    /* ===== 수정 팝업 ===== */
+    function openEditWindow(id){
+      var r = rows.find(function(x){ return x.id===id; });
+      if(!r) return;
+      var w = window.open('', '_blank', 'width=560,height=760');
+      if(!w) { alert('팝업 차단 해제 후 다시 시도하세요.'); return; }
+
+      var html = ''
+      + '<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+      + '<title>예약 수정</title><script src="https://cdn.tailwindcss.com"><' + '/script>'
+      + '</head><body class="bg-gray-50 text-gray-900 p-4">'
+      + '<h1 class="text-xl font-semibold mb-4">예약 수정</h1>'
+      + '<form id="editForm" class="grid grid-cols-1 gap-3">'
+      + '<label class="text-sm">고객명<input id="e_name" class="w-full rounded-xl border px-3 py-2" /></label>'
+      + '<label class="text-sm">전화번호<input id="e_phone" class="w-full rounded-xl border px-3 py-2" /></label>'
+      + '<label class="text-sm">메모/주소<input id="e_memo" class="w-full rounded-xl border px-3 py-2" /></label>'
+      + '<label class="text-sm">구매일<input type="date" id="e_purchase" class="w-full rounded-xl border px-3 py-2" /></label>'
+      + '<label class="text-sm">수령일<input type="date" id="e_pickup" class="w-full rounded-xl border px-3 py-2" /></label>'
+      + '<label class="text-sm">수량(EA)<input type="number" id="e_qty" min="0" class="w-full rounded-xl border px-3 py-2" /></label>'
+      + '<label class="text-sm">개당 단가(원)<input id="e_unit" class="w-full rounded-xl border px-3 py-2" /></label>'
+      + '<label class="text-sm">판매금액(원)<input id="e_amt" class="w-full rounded-xl border px-3 py-2" /></label>'
+      + '<div class="mt-2 flex gap-2"><button id="saveEdit" class="px-4 py-2 rounded-xl bg-gray-900 text-white">저장</button>'
+      + '<button id="cancelEdit" class="px-4 py-2 rounded-xl border">닫기</button></div>'
+      + '</form>'
+      + '<script>var KEY="'+STORAGE_KEY.replace(/"/g,'')+'";'
+      + 'function numOnly(s){return (s||"").replace(/[^0-9]/g,"");}'
+      + 'function withCommas(n){return n.toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ",");}'
+      + 'function fmtPhone(v){var d=numOnly(v);if(d.length>=11){return d.replace(/(\\\\d{3})(\\\\d{4})(\\\\d{4}).*/,\"$1-$2-$3\");}'
+      + 'if(d.length===10){return d.replace(/(\\\\d{3})(\\\\d{3})(\\\\d{4}).*/,\"$1-$2-$3\");}'
+      + 'if(d.length>=7){return d.replace(/(\\\\d{3})(\\\\d{3,4})(\\\\d{0,4}).*/,function(m,a,b,c){return c?a+\"-\"+b+\"-\"+c:a+\"-\"+b;});}return d;}'
+      + 'var rows=[];try{rows=JSON.parse(localStorage.getItem(KEY)||\"[]\");}catch(e){rows=[];}'
+      + 'var id="'+id.replace(/"/g,'')+'";var r=null;for(var i=0;i<rows.length;i++){if(rows[i].id===id){r=rows[i];break;}}'
+      + 'function byId(x){return document.getElementById(x);}function ymd(d){var y=d.getFullYear(),m=(\"0\"+(d.getMonth()+1)).slice(-2),da=(\"0\"+d.getDate()).slice(-2);return y+\"-\"+m+\"-\"+da;}'
+      + 'function money(el){return parseInt(numOnly(el.value||\"0\"),10)||0;}function setMoney(el,v){var nv=withCommas(v||0);if(el.value!==nv)el.value=nv;}'
+      + 'var guard=false;function recompute(last){if(guard)return;guard=true;var q=parseInt(byId(\"e_qty\").value||\"0\",10)||0;var u=money(byId(\"e_unit\"));var a=money(byId(\"e_amt\"));'
+      + 'if(last===\"qty\"||last===\"unit\"){if(q>0&&u>0)setMoney(byId(\"e_amt\"),q*u);}else if(last===\"amount\"){if(q>0&&a>0)setMoney(byId(\"e_unit\"),Math.floor(a/q));}'
+      + 'else{if(q>0&&u>0&&a===0)setMoney(byId(\"e_amt\"),q*u);if(q>0&&a>0&&u===0)setMoney(byId(\"e_unit\"),Math.floor(a/q));}'
+      + 'guard=false;}'
+      + 'byId(\"e_name\").value=r&&r.name||\"\";'
+      + 'byId(\"e_phone\").value=r&&r.phone||\"\";'
+      + 'byId(\"e_memo\").value=r&&r.memo||\"\";'
+      + 'byId(\"e_purchase\").value=r&&r.purchaseDate||ymd(new Date());'
+      + 'byId(\"e_pickup\").value=r&&r.pickupDate||\"\";'
+      + 'byId(\"e_qty\").value=r&&r.qty||0;'
+      + 'setMoney(byId(\"e_unit\"),(r&&r.unitW)||0);'
+      + 'setMoney(byId(\"e_amt\"),(r&&r.totalW)||0);'
+      + '[\"input\",\"blur\",\"change\"].forEach(function(ev){'
+      + 'byId(\"e_unit\").addEventListener(ev,function(e){e.target.value=withCommas(numOnly(e.target.value));recompute(\"unit\");});'
+      + 'byId(\"e_qty\").addEventListener(ev,function(){recompute(\"qty\");});'
+      + 'byId(\"e_amt\").addEventListener(ev,function(e){e.target.value=withCommas(numOnly(e.target.value));recompute(\"amount\");});'
+      + '});'
+      + 'byId(\"e_phone\").addEventListener(\"blur\",function(e){e.target.value=fmtPhone(e.target.value);});'
+      + 'byId(\"saveEdit\").addEventListener(\"click\",function(ev){ev.preventDefault();if(!r) return;'
+      + 'r.name=byId(\"e_name\").value.trim();'
+      + 'r.phone=fmtPhone(byId(\"e_phone\").value.trim());'
+      + 'r.memo=byId(\"e_memo\").value.trim();'
+      + 'r.purchaseDate=byId(\"e_purchase\").value||ymd(new Date());'
+      + 'r.pickupDate=byId(\"e_pickup\").value;'
+      + 'r.qty=parseInt(byId(\"e_qty\").value||\"0\",10)||0;'
+      + 'r.unitW = money(byId("e_unit"));'
+      + 'r.totalW = money(byId("e_amt")) || (r.qty * r.unitW);'
+      + 'for(var i=0;i<rows.length;i++){if(rows[i].id===id){rows[i]=r;break;}}'
+      + 'localStorage.setItem(KEY, JSON.stringify(rows));'
+      + 'try{ if(window.opener && !window.opener.closed){ window.opener.postMessage({ type:\"LEDGER_UPDATED\", key: KEY }, \"*\"); } }catch(e){}'
+      + 'window.close();});'
+      + 'byId(\"cancelEdit\").addEventListener(\"click\",function(ev){ev.preventDefault();window.close();});'
+      + '<' + '/script></body></html>';
+
+      w.document.open(); w.document.write(html); w.document.close();
+    }
+
+    /* 인쇄(중복 방지) */
+    (function(){ var last=0; document.getElementById('printBtn').addEventListener('click', function(){ var n=Date.now(); if(n-last<500) return; last=n; window.print(); }); })();
+
+    /* ===== 렌더 ===== */
+    function render(){
+      var todayStr = ymdLocal(new Date());
+      var d = new Date(); d.setDate(d.getDate()+1);
+      var tomorrowStr = ymdLocal(d);
+
+      var filtered = applyFilters(rows);
+      var sorted = filtered.slice().sort(function(a,b){
+        var f=sortState.field, dir=sortState.dir;
+        var numeric = (f==='qty'||f==='unitW'||f==='totalW');
+        var av = numeric ? Number(a[f]||0) : (a[f]||'').toString().toLowerCase();
+        var bv = numeric ? Number(b[f]||0) : (b[f]||'').toString().toLowerCase();
+        if(av < bv) return dir==='asc'?-1:1;
+        if(av > bv) return dir==='asc'? 1:-1;
+        return (b.createdAt||0)-(a.createdAt||0);
+      });
+
+      var tbody = document.getElementById('tbody'); tbody.innerHTML='';
+      sorted.forEach(function(r){
+        var isToday = r.pickupDate===todayStr;
+        var isTomorrow = r.pickupDate===tomorrowStr;
+        var tr=document.createElement('tr');
+        tr.className='border-b last:border-0 hover:bg-gray-50' + (isToday?' bg-blue-50':(isTomorrow?' bg-yellow-50':''));
+
+        function cell(txt, right){ var td=document.createElement('td'); td.className='px-3 py-2'+(right?' text-right':''); td.textContent=txt==null?'':txt; return td; }
+
+        tr.appendChild(cell(r.name));
+        tr.appendChild(cell(formatPhone(r.phone)));
+        tr.appendChild(cell(r.memo||''));
+        tr.appendChild(cell(r.purchaseDate||''));
+
+        var tdp=cell(r.pickupDate||'');
+        if(isToday||isTomorrow){
+          var b=document.createElement('span'); b.className='ml-2 px-2 py-0.5 text-xs rounded-full '+(isToday?'bg-blue-100 text-blue-800':'bg-yellow-100 text-yellow-800'); b.textContent=isToday?'오늘':'내일';
+          tdp.appendChild(b);
+        }
+        tr.appendChild(tdp);
+
+        tr.appendChild(cell(withCommas(r.qty), true));
+        tr.appendChild(cell(withCommas(r.unitW), true));
+        var tdAmt=cell(withCommas(r.totalW), true); var u=document.createElement('span'); u.className='text-gray-500'; u.textContent='원'; tdAmt.appendChild(u);
+        tr.appendChild(tdAmt);
+
+        var manage=document.createElement('td'); manage.className='px-3 py-2 text-center no-print';
+        var eBtn=document.createElement('button'); eBtn.className='edit px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-100'; eBtn.textContent='수정'; eBtn.setAttribute('data-id', r.id);
+        var dBtn=document.createElement('button'); dBtn.className='del ml-2 px-3 py-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50'; dBtn.textContent='삭제'; dBtn.setAttribute('data-id', r.id);
+        manage.appendChild(eBtn); manage.appendChild(dBtn); tr.appendChild(manage);
+
+        tbody.appendChild(tr);
+      });
+
+      var totalQty = sorted.reduce(function(s,x){ return s+(x.qty||0); }, 0);
+      var totalW  = sorted.reduce(function(s,x){ return s+(x.totalW||0); }, 0);
+      document.getElementById('summary').textContent = '총 ' + withCommas(sorted.length) + '건 · 수량 ' + withCommas(totalQty) + 'EA · 금액 ' + withCommas(totalW) + '원';
+
+      // 동적 버튼
+      $all('#tbody .edit').forEach(function(b){ b.addEventListener('click', function(){ openEditWindow(this.getAttribute('data-id')); }); });
+      $all('#tbody .del').forEach(function(b){
+        b.addEventListener('click', function(){
+          var id=this.getAttribute('data-id');
+          var idx=rows.findIndex(function(x){ return x.id===id; });
+          if(idx<0) return;
+          if(!confirm('['+rows[idx].name+'] 항목을 삭제하시겠습니까?')) return;
+          rows.splice(idx,1); save(rows); render(); showToast('삭제되었습니다.');
+        });
+      });
+
+      // 헤더 삼각형 업데이트
+      refreshCarets();
+    }
+
+    // 초기 렌더
+    render();
+
+    // 안전차원 아이콘 초기화
+    refreshCarets();
+  </script>
+</body>
+</html>
